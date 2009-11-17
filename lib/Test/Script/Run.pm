@@ -8,17 +8,50 @@ use IPC::Run3;
 use File::Basename;
 use File::Spec;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 use base 'Exporter';
 our @EXPORT =
   qw/run_ok run_not_ok run_script run_output_matches run_output_matches_unordered/;
 our @EXPORT_OK = qw/is_script_output last_script_stdout last_script_stderr
-  last_script_exit_code/;
+  last_script_exit_code get_perl_cmd/;
 our %EXPORT_TAGS = ( all => [ @EXPORT, @EXPORT_OK ] );
 my (
     $last_script_stdout,        $last_script_stderr,
     $last_script_exit_code,
 );
+
+=head1 NAME
+
+Test::Script::Run - test the script with run
+
+=head1 SYNOPSIS
+
+    use Test::Script::Run;
+    run_ok( 'app_name', [ app's args ], 'you_app runs ok' );
+    my ( $return, $stdout, $stderr ) = run_script( 'app_name', [ app's args ] );
+    run_output_matches(
+        'app_name', [app's args],
+        [ 'out line 1', 'out line 2' ],
+        [ 'err line 1', 'err line 2' ],
+        'run_output_matches'
+    );
+    run_output_matches_unordered(
+        'app_name', [ app's args ],
+        [ 'out line 2', 'out line 1' ],
+        [ 'err line 2', 'err line 1' ],
+        'run_output_matches_unordered'
+    );
+
+=head1 DESCRIPTION
+
+This module exports some subs to help test and run scripts in your dist's 
+bin/ directory, if the script path is not absolute.
+
+Nearly all the essential code is stolen from Prophet::Test, we think subs like
+those should live below C<Test::> namespace, that's why we packed them and
+created this module.
+
+=head1 FUNCTIONS
 
 =head2 run_script($script, $args, $stdout, $stderr)
 
@@ -46,7 +79,7 @@ sub run_script {
         ( $stdout, $stderr, $return_stdouterr ) =
           ( \$new_stdout, \$new_stderr, 1 );
     }
-    my @cmd = _get_perl_cmd($script);
+    my @cmd = get_perl_cmd($script);
 
     my $ret = run3 [ @cmd, @$args ], undef, $stdout, $stderr;
     $last_script_exit_code = $? >> 8;
@@ -120,31 +153,49 @@ sub _updir {
 
 our $RUNCNT;
 
-# _get_perl_cmd( $script )
-# find the $script path
 
-sub _get_perl_cmd {
+=head2 get_perl_cmd($script, @ARGS)
+
+Returns a list suitable for passing to C<system>, C<exec>, etc. If you pass
+C<$script> then we will search upwards for a file F<bin/$script>.
+
+=cut
+
+sub get_perl_cmd {
     my $script = shift;
     my $base_dir;
-    unless ( File::Spec->file_name_is_absolute($script) ) {
-        my ( $tmp, $i ) = ( _updir($0), 0 );
-        while ( !-d File::Spec->catdir( $tmp, 'bin' ) && $i++ < 10 ) {
-            $tmp = _updir($tmp);
-        }
 
-        $base_dir = File::Spec->catdir( $tmp, 'bin' );
-        die "couldn't find bin dir" unless -d $base_dir;
+    if (defined $script) {
+        unless ( File::Spec->file_name_is_absolute($script) ) {
+            my ( $tmp, $i ) = ( _updir($0), 0 );
+            while ( !-d File::Spec->catdir( $tmp, 'bin' ) && $i++ < 10 ) {
+                $tmp = _updir($tmp);
+            }
+
+            $base_dir = File::Spec->catdir( $tmp, 'bin' );
+            die "couldn't find bin dir" unless -d $base_dir;
+        }
     }
 
-    my @cmd = ( $^X, ( map { "-I$_" } @INC ) );
+    # We grep out references because of INC-hooks like Jifty::ClassLoader
+    my @cmd = ( $^X, ( map { "-I$_" } grep {!ref($_)} @INC ) );
+
     push @cmd, '-MDevel::Cover' if $INC{'Devel/Cover.pm'};
     if ( $INC{'Devel/DProf.pm'} ) {
         push @cmd, '-d:DProf';
         $ENV{'PERL_DPROF_OUT_FILE_NAME'} = 'tmon.out.' . $$ . '.' . $RUNCNT++;
     }
-    push @cmd, $base_dir ? File::Spec->catdir( $base_dir => $script ) : $script;
+
+    if (defined $script) {
+        push @cmd, $base_dir ? File::Spec->catdir( $base_dir => $script ) : $script;
+        push @cmd, @_;
+    }
+
     return @cmd;
 }
+
+# back-compat
+*_get_perl_cmd = \&get_perl_cmd;
 
 =head2 is_script_output($scriptname \@args, \@stdout_match, \@stderr_match, $msg)
 
@@ -264,7 +315,7 @@ sub run_output_matches {
     my ( $script, $args, $expected, $stderr, $msg ) = @_;
     local $Test::Builder::Level = $Test::Builder::Level + 1;
     lives_and {
-        local $Test::Builder::Level = $Test::Builder::Level + 3;
+        local $Test::Builder::Level = $Test::Builder::Level + 5;
         is_script_output( $script, $args, $expected, $stderr, $msg );
     };
 }
@@ -376,37 +427,6 @@ sub last_script_exit_code     { $last_script_exit_code }
 
 __END__
 
-=head1 NAME
-
-Test::Script::Run - test the script with run
-
-=head1 SYNOPSIS
-
-    use Test::Script::Run;
-    run_ok( 'app_name', [ app's args ], 'you_app runs ok' );
-    my ( $return, $stdout, $stderr ) = run_script( 'app_name', [ app's args ] );
-    run_output_matches(
-        'app_name', [app's args],
-        [ 'out line 1', 'out line 2' ],
-        [ 'err line 1', 'err line 2' ],
-        'run_output_matches'
-    );
-    run_output_matches_unordered(
-        'app_name', [ app's args ],
-        [ 'out line 2', 'out line 1' ],
-        [ 'err line 2', 'err line 1' ],
-        'run_output_matches_unordered'
-    );
-
-=head1 DESCRIPTION
-
-This module exports some subs to help test and run scripts in your dist's 
-bin/ directory, if the script path is not absolute.
-
-Nearly all the essential code is stolen from Prophet::Test, we think subs like
-those should live below C<Test::> namespace, that's why we packed them and
-created this module.
-
 =head1 DEPENDENCIES
 
 L<Test::More>, L<Test::Exception>, L<IPC::Run3>, L<File::Basename>, L<File::Spec>
@@ -425,4 +445,6 @@ Copyright 2009 Best Practical Solutions.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
+
+=cut
 
