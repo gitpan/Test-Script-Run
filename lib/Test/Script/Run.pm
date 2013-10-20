@@ -8,7 +8,7 @@ use IPC::Run3;
 use File::Basename;
 use File::Spec;
 
-our $VERSION = '0.05';
+our $VERSION = '0.07';
 use base 'Exporter';
 our @EXPORT =
   qw/run_ok run_not_ok run_script run_output_matches run_output_matches_unordered/;
@@ -24,7 +24,7 @@ our @BIN_DIRS = ('bin','sbin','script', '.');
 
 =head1 NAME
 
-Test::Script::Run - test the script with run
+Test::Script::Run - test scripts with run
 
 =head1 SYNOPSIS
 
@@ -49,7 +49,7 @@ Test::Script::Run - test the script with run
 =head1 DESCRIPTION
 
 This module exports some subs to help test and run scripts in your dist's 
-bin/ directory, if the script path is not absolute.
+script directory( bin, sbin, script, etc ), if the script path is not absolute.
 
 Nearly all the essential code is stolen from Prophet::Test, we think subs like
 those should live below C<Test::> namespace, that's why we packed them and
@@ -65,7 +65,7 @@ our caller.
 $script is the name of the script to be run (such as 'prophet'). $args is a
 reference to an array of arguments to pass to the script. $stdout and $stderr
 are both optional; if passed in, they will be passed to L<IPC::Run3>'s run3
-subroutine as its $stdout and $stderr args.  Otherwise, this subroutine will
+subroutine as its $stdout and $stderr args.  Otherwise, this subroutine will
 create scalar references to pass to run3 instead (which are treated as strings
 for STDOUT/STDERR to be written to).
 
@@ -147,7 +147,7 @@ sub _run_ok {
     lives_and {
         local $Test::Builder::Level = $Test::Builder::Level + 1;
         my ( $ret, $stdout, $stderr ) = run_script( $script, $args );
-        cmp_ok( $last_script_exit_code, $cmp, 0, $msg );
+        cmp_ok( $last_script_exit_code, $cmp, 0, _generate_test_name($msg, $script, @$args) );
     };
 }
 
@@ -326,7 +326,7 @@ sub _check_cmp_closure_output {
         push @$stdout_err, "got nothing, expected: $line";
     }
 
-    my $test_name = join( ' ', $msg ? "$msg:" : '', $script, @$args );
+    my $test_name = _generate_test_name( $msg, $script, @$args );
     is( scalar(@$stdout_err), 0, $test_name );
 
     if (@$stdout_err) {
@@ -420,12 +420,42 @@ sub run_output_matches_unordered {
         push @$errors, "got nothing, expected: $exp_line";
     }
 
-    my $test_name = join( ' ', $msg ? "$msg:" : '', $cmd, @$args );
+    my $test_name = _generate_test_name( $msg, $cmd, @$args );
     is( scalar(@$errors), 0, $test_name );
 
     if (@$errors) {
         diag( "Errors: " . join( "\n", @$errors ) );
     }
+}
+
+sub _is_windows {
+    return $^O =~ /MSWin/;
+}
+
+sub _generate_test_name {
+    my $msg = shift;
+    my $script = shift;
+    my @args = @_;
+    my $args;
+    if ( _is_windows() ) {
+        eval { require Win32::ShellQuote };
+        if ($@) {
+            $args = join ' ', @_;
+        }
+        else {
+            $args = Win32::ShellQuote::quote_system_string(@_);
+        }
+    }
+    else {
+        eval { require String::ShellQuote };
+        if ($@) {
+            $args = join ' ', @_;
+        }
+        else {
+            $args = String::ShellQuote::shell_quote(@_);
+        }
+    }
+    return join( ' ', $msg ? "$msg:" : (), $script, defined $args && length $args ? $args : () );
 }
 
 =head2 last_script_stdout
@@ -467,7 +497,7 @@ No bugs have been reported.
 
 =head1 AUTHOR
 
-sunnavy  C<< <sunnavy@bestpractical.com> >>
+sunnavy <sunnavy@bestpractical.com>
 
 =head1 LICENCE AND COPYRIGHT
 
